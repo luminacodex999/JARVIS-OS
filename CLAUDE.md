@@ -131,3 +131,19 @@ Multiple Claude Code sessions work on this repo concurrently:
 - Run `npm test && npm run typecheck` before claiming anything done.
 - Don't kill the dev server on 4100 — another session may be using it.
 - Leave handoff notes in `docs/` if you stop mid-feature.
+
+---
+
+## Project context (moved from global CONTEXT.md, 2026-08-14)
+
+**Path:** `~/Documents/Projects/JARVIS-OS` — Jared's personal dev/ops cockpit. Separate from OLYMPUS by design. **Linear:** LCI, project JARVIS.
+Fork of `Bennettxai/FounderOS-DEMO` (MIT cohort demo). **Repo is PUBLIC — make private before wiring any real credential.**
+
+- **Single-operator by design** — no auth/RBAC, `better-sqlite3` local file DB. OLYMPUS adds Postgres/auth on its own side. Next.js 14 + TS + Tailwind + Zod + Vitest, dev port **4100**, **Node 22 pinned**.
+- "larp-first, real-ready": every page/route reads through `lib/db.ts`, never raw SQL. New data = repo method + Zod schema + seed entry + test.
+- Theme is **Monolith** (JetBrains Mono, `#0a0a0a`, color = status only). OLYMPUS `TASTE.md` does NOT apply here.
+- **No `LICENSE`** (README claims MIT; commit `f10c948` deleted it). `lib/creds.ts` resolves the ORIGINAL author's local paths — rework before use.
+- Ships a **Stripe** connector (`lib/connectors/payments.ts`). Do not wire it — Authorize.net/Shopify only.
+- `scripts/reap-claude-orphans.sh` kills orphaned `claude` procs (ppid 1, no tty, >2h) — the SG-817 leak fix. **It never touches the DB — see LCI-7.**
+
+In-flight LCI tickets for this repo live in `~/.claude/CONTEXT.md` § "JARVIS-OS / LCI" — that file is the dashboard, this one is the architecture.
