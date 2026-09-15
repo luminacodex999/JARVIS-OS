@@ -147,3 +147,48 @@ Fork of `Bennettxai/FounderOS-DEMO` (MIT cohort demo). **Repo is PUBLIC — make
 - `scripts/reap-claude-orphans.sh` kills orphaned `claude` procs (ppid 1, no tty, >2h) — the SG-817 leak fix. **It never touches the DB — see LCI-7.**
 
 In-flight LCI tickets for this repo live in `~/.claude/CONTEXT.md` § "JARVIS-OS / LCI" — that file is the dashboard, this one is the architecture.
+
+---
+
+## Repo context — moved from the global `CONTEXT.md` (LCI-191)
+
+> Moved here 2026-09-15. This is single-repo content that had been loading in every
+> session in **every** repo via the global `@CONTEXT.md` import, which had reached
+> 92,898 chars — 3.7x its own written guardrail. It now loads only here.
+>
+> **Verbatim.** Nothing was cut in the move; compression is a separate step.
+>
+> The in-flight ticket table below is **pending `/status`** (live from Linear) and gets
+> deleted from this file when that lands. Until then it can go stale — Linear is the
+> source of truth, this table is a convenience copy.
+
+**Path:** `~/Documents/Projects/JARVIS-OS` · **Linear:** LCI, project JARVIS · dev port **4100**
+Jared's personal dev/ops cockpit. Separate from OLYMPUS by design. Fork of `Bennettxai/FounderOS-DEMO`.
+
+- **Repo is PUBLIC — make private before wiring any real credential.**
+- Ships a **Stripe** connector (`lib/connectors/payments.ts`). Do not wire it — Authorize.net/Shopify only.
+- **Node 22 pinned** (`.nvmrc` + `engines`) — `better-sqlite3` has no prebuild for 25/26. fnm switches on `cd`; default `node` is 26, so run npm via `zsh -i -c`.
+- `scripts/reap-claude-orphans.sh` kills orphaned `claude` procs (ppid 1, no tty, >2h) — the SG-817 leak fix. **Never touches the DB — see LCI-7.** Runs from `~/.local/bin` (launchd can't exec under `~/Documents` — TCC), label `com.jaredharvill.claude-reaper`, /30min.
+- `scripts/codex-review.sh` (LCI-6) — `codex exec --sandbox read-only`, `--spec`/`--deferred`, no verdict → exit 2 never a pass. Codex quota confirmed WORKING 2026-08-21 (the 08-14 exhaustion note was stale).
+- CI job name `Build & Test` is load-bearing (org ruleset matches it); Node from `.nvmrc`, asserts v22 + prebuild.
+- **Headless dispatch costs 45–70k tokens before any work.** Opus $0.65 / Sonnet $0.43 / Haiku $0.09, same prompt — pin a model per lane (LCI-11).
+- Stack, theme, architecture rule: **`JARVIS-OS/CLAUDE.md`**. Session narrative + machine facts: **LCI-16**.
+
+### What's shipped (JARVIS-OS)
+
+- LCI-13 — `Build & Test` CI, first in the repo (#2) · LCI-6 — Codex cross-family reviewer, on `main`
+
+### In-flight (LCI / JARVIS)
+
+**LCI-109 defect 1 is FIXED — step 4 is UNBLOCKED in every repo** (verified 2026-09-04 by running LCI-29 through it end to end). LCI-103 made `build_test_prompt` return a `TestPrompt` carrying `.segments`, so the scan reads interpolated content only and can no longer flag its own boilerplate; the ticket's own repro is stale, calling `.replace()` on what is no longer a `str`. **But the fix overshot into fail-open: `allowed_texts` is constructed identically to `segments`, so residue reduces to whitespace and `assert_no_implementation` can never fire** — measured 31,860 → 0 non-whitespace on real inputs. Blindness now holds by CONSTRUCTION (allowlisted prompt), not by verification; never cite a clean lane pass as evidence. Defect 2 (walks gitignored paths) still live, harmless only while residue is empty.
+
+Full table lives in Linear (team LCI, projects JARVIS / jarvis-context / **ATLAS**). **LCI-16 is the JARVIS resume point; LCI-47 is the ATLAS one.**
+Blocking chain: LCI-12 (auth gate) + LCI-7 (stale claim TTL) + LCI-8 (decisionType) gate the spawner.
+LCI-14 PUSHED on `lci-14-model-routing` in spiritguide-ios + spiritguide-android (2026-08-24); identical 612-line add — `routing.yaml`, `scripts/routing_loader.py`, `AGENTS.md`, `CLAUDE.md`. **No PRs opened yet** — that is what still gates LCI-9.
+
+
+**Next actions:** SG-1388 → SG-1389/1390 → SG-1391 → LCI-15, then LCI-7/LCI-8 → spawner. **LCI-14's `get_reviewer_model()` hard-raises on shared MODEL_FAMILY; evidence does not support that as an invariant** — relative capability decides, not family. Make it default-with-override. Evidence: `Solrise/JARVIS/2026-08-16_autonomous-sdlc-research-and-build-order.md`.
+
+**Fleet-size ceiling (measured):** 3–5 agents/repo; break-main 0.77% at 2–5 writers vs 12.5% at 40+. Verification throughput is the lever (LCI-10).
+
+---
