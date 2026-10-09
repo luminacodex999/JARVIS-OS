@@ -39,6 +39,21 @@
 # Every kill and skip line reports the MEASURED before/after state of the
 # process. A signal call that does not throw is not evidence that anything
 # happened: `kill` succeeds against a process that was already gone.
+#
+# Two consequences of taking that seriously, both found in review of LCI-359:
+#
+# 1. SIGTERM delivery is ASYNCHRONOUS. A process can still read `alive` the
+#    instant after the signal is sent, so the line cannot say `reaped` yet --
+#    that would be a status contradicting its own measurement. It says
+#    `signaled` until an exit is actually observed, and the SIGKILL pass below
+#    reports the final transition. The run tally is likewise recomputed from
+#    measured state at the end, never accumulated from signals sent.
+#
+# 2. The subtree is re-walked IMMEDIATELY BEFORE signalling. The scan loop and
+#    the kill loop are separated by every other candidate's scan, and a tree can
+#    gain a tty-attached descendant inside that window; acting on the stale list
+#    would kill a live PTY. The snapshot that authorises a kill has to be the
+#    one taken at the moment of the kill.
 
 set -uo pipefail
 
@@ -152,8 +167,7 @@ if [ -n "$candidates" ]; then
       continue
     fi
 
-    to_kill="${to_kill}${pid}|${age}|${rss}|${cpu}|${kin}"$'\n'
-    all_targets="$all_targets $pid $kin"
+    to_kill="${to_kill}${pid}|${age}|${rss}|${cpu}"$'\n'
   done <<< "$candidates"
 fi
 
@@ -162,29 +176,68 @@ printf '%s' "$new_state" > "$STATE"
 
 [ -z "$to_kill" ] && exit 0
 
-freed_kb=0
-count=0
-while IFS='|' read -r pid age rss cpu kin; do
+parent_rss=""
+while IFS='|' read -r pid age rss cpu; do
   [ -z "${pid:-}" ] && continue
+
+  # Re-walk the subtree HERE, not from the scan: a tty-attached descendant may
+  # have appeared since, and the stale list would take a live PTY with it.
+  kin=$(descendants "$pid")
+  held_pid=""
+  held_tty=""
+  for k in $kin; do
+    ktty=$(ptty "$k")
+    if [ -n "$ktty" ] && [ "$ktty" != "??" ]; then
+      held_pid="$k"
+      held_tty="$ktty"
+      break
+    fi
+  done
+
+  if [ -n "$held_pid" ]; then
+    log "skipped pid=$pid before=$(pstate "$pid") reason=tty-attached-descendant-appeared child=$held_pid tty=$held_tty after=$(pstate "$pid")"
+    continue
+  fi
+
   targets="$pid${kin:+ $kin}"
+  all_targets="$all_targets $targets"
+  parent_rss="$parent_rss $pid:$rss"
+
   before=$(pstate "$pid")
   kill $targets 2>/dev/null
   after=$(pstate "$pid")
+
   kin_after=""
   for k in $kin; do kin_after="$kin_after $k=$(pstate "$k")"; done
-  freed_kb=$((freed_kb + rss))
-  count=$((count + 1))
-  log "reaped  pid=$pid before=$before after=$after age=${age}s cpu=${cpu}s (flat) rss=$((rss / 1024))MB kids=[${kin:-none}] kids_after=[${kin_after# }]"
+
+  if [ "$after" = "dead" ]; then
+    log "reaped  pid=$pid before=$before after=$after age=${age}s cpu=${cpu}s (flat) rss=$((rss / 1024))MB kids=[${kin:-none}] kids_after=[${kin_after# }]"
+  else
+    log "signaled pid=$pid before=$before after=$after age=${age}s cpu=${cpu}s (flat) SIGTERM sent, exit not yet observed kids=[${kin:-none}] kids_after=[${kin_after# }]"
+  fi
 done <<< "$to_kill"
 
-# Anything that ignored SIGTERM gets SIGKILL.
+# Anything that ignored SIGTERM, or had not exited yet, gets SIGKILL.
 sleep 5
 for t in $all_targets; do
   [ -z "$t" ] && continue
   b=$(pstate "$t")
   [ "$b" = "dead" ] && continue
   kill -9 "$t" 2>/dev/null
-  log "SIGKILL pid=$t before=$b after=$(pstate "$t") (ignored SIGTERM)"
+  log "SIGKILL pid=$t before=$b after=$(pstate "$t") (did not exit on SIGTERM)"
+done
+
+# Tally from OBSERVED state, never from the number of signals sent.
+freed_kb=0
+count=0
+for pair in $parent_rss; do
+  [ -z "$pair" ] && continue
+  p="${pair%%:*}"
+  r="${pair##*:}"
+  if [ "$(pstate "$p")" = "dead" ]; then
+    count=$((count + 1))
+    freed_kb=$((freed_kb + r))
+  fi
 done
 
 log "run complete: reaped ${count} proc(s), ~$((freed_kb / 1024))MB"
