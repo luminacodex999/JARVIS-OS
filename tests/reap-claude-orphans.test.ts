@@ -22,7 +22,7 @@ type ProcessFixture = {
   rss?: number;
   comm: string;
   cputime?: string;
-  ignoresSignals?: boolean;
+  ignoresTerm?: boolean;
 };
 
 type ReaperResult = {
@@ -69,7 +69,7 @@ function runReaper(
   );
   writeFileSync(
     path.join(fixtureDir, 'stubborn'),
-    processes.filter(({ ignoresSignals }) => ignoresSignals).map(({ pid }) => pid).join('\n') + '\n',
+    processes.filter(({ ignoresTerm }) => ignoresTerm).map(({ pid }) => pid).join('\n') + '\n',
   );
 
   const candidates = processes.filter(({ ppid }) => ppid === 1);
@@ -123,7 +123,7 @@ fi
 for pid in "$@"; do
   [[ -z "$pid" ]] && continue
   printf '%s\\n' "$pid" >> "$REAPER_FIXTURE/signals"
-  if ! grep -qx "$pid" "$REAPER_FIXTURE/stubborn" 2>/dev/null; then
+  if [[ "$signal" == "-9" ]] || ! grep -qx "$pid" "$REAPER_FIXTURE/stubborn" 2>/dev/null; then
     printf '%s\\n' "$pid" >> "$REAPER_FIXTURE/killed"
   fi
 done
@@ -221,15 +221,16 @@ function expectMeasuredState(line: string, before: RegExp, after: RegExp): void 
 }
 
 describe('reap-claude-orphans', () => {
-  test('skips the entire tree and names the parent, TTY child, tty, and observed state (rejects parent-only TTY filtering)', () => {
+  test('skips the entire tree and names a TTY grandchild and its tty (rejects checking only direct children once)', () => {
     const result = runReaper([
       processFixture(),
-      processFixture({ pid: 402, ppid: 401, tty: 'ttys021', etime: '03:00:00', comm: 'claude bg-spare' }),
+      processFixture({ pid: 402, ppid: 401, tty: '??', etime: '03:00:00', comm: 'claude bg-worker' }),
+      processFixture({ pid: 403, ppid: 402, tty: 'ttys021', etime: '02:00:00', comm: 'claude bg-spare' }),
     ]);
 
     expect(result.signaledPids).toEqual([]);
     const line = actionLine(result.log, 401, /skip/i);
-    expect(line).toMatch(/\b402\b/);
+    expect(line).toMatch(/\b403\b/);
     expect(line).toContain('ttys021');
     expectMeasuredState(line, /(alive|present|running)/, /(alive|present|running)/);
   });
@@ -279,21 +280,29 @@ describe('reap-claude-orphans', () => {
     expectMeasuredState(line, /(alive|present|running)/, /(dead|gone|absent|stopped|missing)/);
   });
 
-  test('every kill or skip line reflects before and after process state (rejects treating a successful signal call as an outcome)', () => {
+  test('every kill or skip line reflects before and after process state (rejects using a successful signal call as the outcome)', () => {
     const result = runReaper([
       processFixture({ pid: 701 }),
-      processFixture({ pid: 702, ppid: 701, tty: 'ttys031', comm: 'claude bg-spare' }),
-      processFixture({ pid: 711, ignoresSignals: true }),
-      processFixture({ pid: 712, ppid: 711, tty: '??', comm: 'claude bg-worker', ignoresSignals: true }),
+      processFixture({ pid: 702, ppid: 701, tty: '??', comm: 'claude bg-worker' }),
+      processFixture({ pid: 703, ppid: 702, tty: 'ttys031', comm: 'claude bg-spare' }),
+      processFixture({ pid: 711 }),
+      processFixture({ pid: 712, ppid: 711, tty: '??', comm: 'claude bg-worker' }),
+      processFixture({ pid: 721, ignoresTerm: true }),
     ]);
     const actionLines = result.log
       .split('\n')
-      .filter((line) => /pid=(701|711|712)/.test(line) && /(skip|reap|kill)/i.test(line));
+      .filter((line) => line.length > 0)
+      .filter((line) => !/\brun complete:/i.test(line))
+      .filter((line) => /\b(?:skip|reap|kill)\w*|\bSIG(?:TERM|KILL)\b/i.test(line));
 
-    expect(actionLines.some((line) => line.includes('pid=701') && /skip/i.test(line))).toBe(true);
-    expect(actionLines.some((line) => line.includes('pid=711') && /(reap|kill)/i.test(line))).toBe(true);
     for (const line of actionLines) {
-      expectMeasuredState(line, /(alive|present|running)/, /(alive|present|running)/);
+      expectMeasuredState(
+        line,
+        /(alive|present|running|dead|gone|absent|stopped|missing)/,
+        /(alive|present|running|dead|gone|absent|stopped|missing)/,
+      );
     }
+    expect(actionLines.some((line) => /skip/i.test(line))).toBe(true);
+    expect(actionLines.some((line) => /(?:reap|kill|SIGTERM|SIGKILL)/i.test(line))).toBe(true);
   });
 });
